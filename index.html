@@ -982,6 +982,7 @@ const GENRES = ["All","Rock","Jazz","Soul","Hip-Hop","Electronic","Folk","Altern
 let collection = JSON.parse(localStorage.getItem('vv-collection') || '[]');
 let conditions = JSON.parse(localStorage.getItem('vv-conditions') || '{}');
 let wantlist   = JSON.parse(localStorage.getItem('vv-wantlist')   || '[]');
+let featuredRecords = [];
 let aiResults = [];
 let currentGenre = "All";
 let searchTimer = null;
@@ -1018,7 +1019,7 @@ function setGenre(g) {
   currentGenre = g;
   renderGenrePills();
   if (currentQuery.length >= 2) onSearch(currentQuery);
-  else renderGrid([...CATALOG]);
+  else renderGrid(featuredRecords);
 }
 
 // ── SEARCH ──
@@ -1026,7 +1027,7 @@ function onSearch(val) {
   currentQuery = val.trim();
   clearTimeout(searchTimer);
   if (!currentQuery || currentQuery.length < 2) {
-    renderGrid([...CATALOG]);
+    renderGrid(featuredRecords);
     return;
   }
   // Show local results instantly while Discogs loads
@@ -1080,26 +1081,26 @@ async function discogsProxySearch(query) {
         // Use real Discogs average market price when available, fall back to estimate
         const realPrice = item.avg_price ? Math.round(item.avg_price) : null;
         const avgPrice = realPrice || estimateVinylPrice(genre, year);
+        const numForSale = item.num_for_sale || 0;
+        const priceRange = numForSale > 0
+          ? `${numForSale} listing${numForSale !== 1 ? 's' : ''} on Discogs`
+          : null;
         return {
           id: item.id || (90000 + Date.now() + i),
           artist, title, year, genre,
           label: item.label?.[0] || '',
           avgPrice,
-          hasRealPrice: !!realPrice,
+          priceRange,
+          hasRealPrice: !!(item.has_real_price || item.avg_price),
           thumb: item.cover_image || item.thumb || '',
           pi: i % 10
         };
       });
 
-    // Merge: local hits first, then Discogs results not already shown
-    const localHits = localSearch(query);
-    const localIds = new Set(localHits.map(r => r.id));
-    const merged = [
-      ...localHits,
-      ...discogsResults.filter(r => !localIds.has(r.id))
-    ];
+    // Only show results with real cover art
+    const withCovers = discogsResults.filter(r => r.thumb && !r.thumb.includes('spacer'));
     document.getElementById('loadingRow').style.display = 'none';
-    renderGrid(merged);
+    renderGrid(withCovers);
   } catch (e) {
     document.getElementById('loadingRow').style.display = 'none';
     // If rate limited, show a subtle notice but keep local results visible
@@ -1127,15 +1128,17 @@ function estimateVinylPrice(genre, year) {
 
 // ── GRID ──
 function renderGrid(records) {
-  const src = records !== undefined ? records : CATALOG;
+  const src = records !== undefined ? records : [];
   const q = currentQuery.toLowerCase();
   const filtered = src.filter(r => {
+    // Only show records with real cover art
+    if (!r.thumb) return false;
     const mq = !q || r.artist.toLowerCase().includes(q) || r.title.toLowerCase().includes(q) || (r.label||'').toLowerCase().includes(q);
     const mg = currentGenre === 'All' || (r.genre||'').toLowerCase().includes(currentGenre.toLowerCase());
     return mq && mg;
   });
 
-  if (!filtered.length) {
+  if (!filtered.length && !document.getElementById('loadingRow').style.display !== 'none') {
     document.getElementById('recordsGrid').innerHTML = `
       <div style="grid-column:1/-1;padding:48px 0;text-align:center;color:rgba(245,234,216,0.3)">
         <div style="font-family:'Playfair Display',serif;font-size:18px;font-style:italic;margin-bottom:8px">No records found</div>
@@ -1174,6 +1177,7 @@ function renderGrid(records) {
         <div class="card-title">${esc(r.title)}</div>
         <div class="card-meta">
           <span class="card-price">${r.avgPrice ? '$'+r.avgPrice : '—'}${r.hasRealPrice ? '' : '<span style="font-size:8px;opacity:0.45;margin-left:2px">est</span>'}</span>
+          ${r.priceRange ? `<span style="font-family:'DM Mono',monospace;font-size:8px;color:rgba(245,234,216,0.3);display:block;margin-top:1px">${r.priceRange}</span>` : ''}
           <span class="card-yr">${r.year || ''}</span>
         </div>
       </div>
@@ -1559,20 +1563,62 @@ async function checkSharedView() {
   }
 }
 
+async function loadFeatured() {
+  document.getElementById('loadingRow').style.display = 'flex';
+  document.getElementById('loadingText').textContent = 'Loading popular vinyl…';
+  try {
+    const res = await fetch('/.netlify/functions/featured-records');
+    if (!res.ok) throw new Error('featured fetch failed');
+    const data = await res.json();
+    featuredRecords = (data.results || [])
+      .filter(item => item.cover_image && !item.cover_image.includes('spacer'))
+      .map((item, i) => {
+        let artist = 'Unknown Artist', title = item.title || 'Unknown';
+        if (item.title?.includes(' - ')) {
+          const parts = item.title.split(' - ');
+          artist = parts[0].replace(/\s*\(\d+\)\s*$/, '').trim();
+          title  = parts.slice(1).join(' - ').trim();
+        }
+        const genre = item.genre?.[0] || item.style?.[0] || 'Unknown';
+        const year  = parseInt(item.year) || 0;
+        const realPrice = item.avg_price ? Math.round(item.avg_price) : null;
+        const avgPrice  = realPrice || estimateVinylPrice(genre, year);
+        return {
+          id: item.id || (80000 + i),
+          artist, title, year, genre,
+          label: item.label?.[0] || '',
+          avgPrice,
+          hasRealPrice: !!(item.has_real_price || item.avg_price),
+          thumb: item.cover_image,
+          pi: i % 10,
+        };
+      });
+    document.getElementById('loadingRow').style.display = 'none';
+    renderGrid(featuredRecords);
+  } catch (e) {
+    document.getElementById('loadingRow').style.display = 'none';
+    // If function not available, show empty state
+    document.getElementById('recordsGrid').innerHTML = `
+      <div style="grid-column:1/-1;padding:64px 0;text-align:center;color:rgba(245,234,216,0.3)">
+        <div style="font-size:36px;margin-bottom:16px">🎵</div>
+        <div style="font-family:'Playfair Display',serif;font-size:20px;font-style:italic;margin-bottom:8px;color:rgba(245,234,216,0.45)">Search for any record above</div>
+        <div style="font-family:'DM Mono',monospace;font-size:10px;letter-spacing:1px">Artist, album title, label…</div>
+      </div>`;
+  }
+}
+
 async function init() {
   // Set personal link in bar
   document.getElementById('myLinkInput').value = getMyUrl();
 
   renderGenrePills();
-  renderGrid([...CATALOG]);
   updateStats();
   updateWantTab();
 
-  // Load from cloud (overrides localStorage if newer data exists)
-  await cloudLoad();
+  // Load cloud collection and featured records in parallel
+  await Promise.all([cloudLoad(), loadFeatured()]);
 
   // Re-render with loaded data
-  renderGrid([...CATALOG]);
   renderCollection();
   renderWantlist();
   updateStats();
