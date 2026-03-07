@@ -467,6 +467,40 @@ main {
   color: var(--amber); letter-spacing: 1px;
 }
 .shared-banner strong { color: var(--amber-light); }
+.my-link-bar {
+  background: rgba(0,0,0,0.3);
+  border-bottom: 1px solid rgba(200,135,58,0.1);
+  padding: 10px 48px; display: flex; align-items: center; gap: 12px;
+  font-family: 'DM Mono', monospace; font-size: 10px;
+  color: rgba(245,234,216,0.4); letter-spacing: 1px; flex-wrap: wrap;
+}
+.my-link-input {
+  flex: 1; max-width: 420px;
+  background: rgba(255,255,255,0.03);
+  border: 1px solid rgba(200,135,58,0.15);
+  border-radius: 4px; color: var(--amber-light);
+  font-family: 'DM Mono', monospace; font-size: 10px;
+  padding: 5px 10px; outline: none; cursor: text;
+}
+.my-link-copy {
+  background: none; border: 1px solid rgba(200,135,58,0.25);
+  color: var(--amber); font-family: 'DM Mono', monospace;
+  font-size: 9px; letter-spacing: 1px; padding: 5px 12px;
+  border-radius: 4px; cursor: pointer; transition: all 0.15s;
+  text-transform: uppercase;
+}
+.my-link-copy:hover { background: rgba(200,135,58,0.1); }
+.sync-indicator {
+  font-family: 'DM Mono', monospace; font-size: 9px;
+  letter-spacing: 1px; color: rgba(245,234,216,0.3);
+  margin-left: auto; display: flex; align-items: center; gap: 6px;
+}
+.sync-dot {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: rgba(39,174,96,0.6);
+}
+.sync-dot.saving { background: var(--amber); animation: pulse 0.8s infinite; }
+@keyframes pulse { 0%,100% { opacity:1; } 50% { opacity:0.3; } }
   header { padding: 16px 20px; }
   main { padding: 28px 20px; }
   .stats-bar { flex-wrap: wrap; }
@@ -502,6 +536,16 @@ main {
   <div class="stat"><div class="stat-val" id="statTop">—</div><div class="stat-lbl">Most Valuable</div></div>
 </div>
 
+<div class="my-link-bar" id="myLinkBar">
+  <span>🔗 Your link —</span>
+  <input class="my-link-input" id="myLinkInput" readonly onclick="this.select()">
+  <button class="my-link-copy" onclick="copyMyLink()">Copy & Bookmark</button>
+  <div class="sync-indicator">
+    <div class="sync-dot" id="syncDot"></div>
+    <span id="syncLabel">Saved</span>
+  </div>
+</div>
+
 <main>
 
   <!-- BROWSE TAB -->
@@ -515,7 +559,7 @@ main {
 
     <div class="loading-row" id="loadingRow" style="display:none">
       <div class="spinner"></div>
-      <span id="loadingText">Searching Discogs…</span>
+      <span id="loadingText">Searching Discogs for more results…</span>
     </div>
 
     <div class="records-grid" id="recordsGrid"></div>
@@ -1010,8 +1054,8 @@ function localSearch(query) {
 
 async function discogsProxySearch(query) {
   document.getElementById('loadingRow').style.display = 'flex';
+  document.getElementById('loadingText').textContent = 'Searching Discogs…';
   try {
-    // Calls our Netlify Function — token stays secret on the server
     const res = await fetch(`/.netlify/functions/discogs-search?q=${encodeURIComponent(query)}`);
     if (!res.ok) throw new Error('proxy error ' + res.status);
     const data = await res.json();
@@ -1033,11 +1077,15 @@ async function discogsProxySearch(query) {
         }
         const genre = item.genre?.[0] || item.style?.[0] || 'Unknown';
         const year  = parseInt(item.year) || 0;
+        // Use real Discogs average market price when available, fall back to estimate
+        const realPrice = item.avg_price ? Math.round(item.avg_price) : null;
+        const avgPrice = realPrice || estimateVinylPrice(genre, year);
         return {
           id: item.id || (90000 + Date.now() + i),
           artist, title, year, genre,
           label: item.label?.[0] || '',
-          avgPrice: estimateVinylPrice(genre, year),
+          avgPrice,
+          hasRealPrice: !!realPrice,
           thumb: item.cover_image || item.thumb || '',
           pi: i % 10
         };
@@ -1053,8 +1101,13 @@ async function discogsProxySearch(query) {
     document.getElementById('loadingRow').style.display = 'none';
     renderGrid(merged);
   } catch (e) {
-    // Proxy not available (e.g. local dev) — local search already showing
     document.getElementById('loadingRow').style.display = 'none';
+    // If rate limited, show a subtle notice but keep local results visible
+    if (e.message.includes('429')) {
+      document.getElementById('loadingText').textContent = 'Discogs rate limit reached — showing local results';
+      document.getElementById('loadingRow').style.display = 'flex';
+      setTimeout(() => { document.getElementById('loadingRow').style.display = 'none'; }, 3000);
+    }
   }
 }
 
@@ -1120,7 +1173,7 @@ function renderGrid(records) {
         <div class="card-artist">${esc(r.artist)}</div>
         <div class="card-title">${esc(r.title)}</div>
         <div class="card-meta">
-          <span class="card-price">${r.avgPrice ? '$'+r.avgPrice : '—'}</span>
+          <span class="card-price">${r.avgPrice ? '$'+r.avgPrice : '—'}${r.hasRealPrice ? '' : '<span style="font-size:8px;opacity:0.45;margin-left:2px">est</span>'}</span>
           <span class="card-yr">${r.year || ''}</span>
         </div>
       </div>
@@ -1301,10 +1354,80 @@ function updateStats() {
   document.getElementById('statTop').textContent   = top ? '$' + top.avgPrice : '—';
 }
 
+// ── USER ID ──
+function generateUUID() {
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
+    const r = Math.random() * 16 | 0;
+    return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
+  });
+}
+
+let userId = localStorage.getItem('vv-userId');
+if (!userId) {
+  userId = generateUUID();
+  localStorage.setItem('vv-userId', userId);
+}
+
+// ── SYNC ──
+let saveTimer = null;
+
+function setSyncState(state) {
+  const dot = document.getElementById('syncDot');
+  const label = document.getElementById('syncLabel');
+  if (!dot || !label) return;
+  if (state === 'saving') {
+    dot.className = 'sync-dot saving';
+    label.textContent = 'Saving…';
+  } else if (state === 'saved') {
+    dot.className = 'sync-dot';
+    label.textContent = 'Saved';
+  } else if (state === 'error') {
+    dot.className = 'sync-dot';
+    dot.style.background = 'rgba(176,58,46,0.7)';
+    label.textContent = 'Save failed';
+  }
+}
+
+async function cloudSave() {
+  setSyncState('saving');
+  try {
+    const res = await fetch('/.netlify/functions/save-collection', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ userId, collection, wantlist, conditions }),
+    });
+    if (!res.ok) throw new Error('save failed');
+    setSyncState('saved');
+  } catch (e) {
+    setSyncState('error');
+  }
+}
+
+async function cloudLoad() {
+  try {
+    const res = await fetch(`/.netlify/functions/get-collection?id=${userId}`);
+    if (!res.ok) return;
+    const data = await res.json();
+    if (data.collection) collection = data.collection;
+    if (data.wantlist)   wantlist   = data.wantlist;
+    if (data.conditions) conditions = data.conditions;
+    // Mirror to localStorage as cache
+    localStorage.setItem('vv-collection', JSON.stringify(collection));
+    localStorage.setItem('vv-wantlist',   JSON.stringify(wantlist));
+    localStorage.setItem('vv-conditions', JSON.stringify(conditions));
+  } catch (e) {
+    // Fall back to localStorage silently
+  }
+}
+
 // ── UTILS ──
 function saveAll() {
+  // Always write to localStorage immediately
   localStorage.setItem('vv-collection', JSON.stringify(collection));
   localStorage.setItem('vv-wantlist',   JSON.stringify(wantlist));
+  // Debounce cloud save by 800ms
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(cloudSave, 800);
 }
 
 function save() { saveAll(); }
@@ -1319,6 +1442,22 @@ function esc(s) {
   return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 
+// ── MY LINK ──
+function getMyUrl() {
+  return window.location.origin + window.location.pathname + '?id=' + userId;
+}
+
+function copyMyLink() {
+  const url = getMyUrl();
+  navigator.clipboard.writeText(url).catch(() => {
+    const el = document.getElementById('myLinkInput');
+    el.select(); document.execCommand('copy');
+  });
+  const btn = document.querySelector('.my-link-copy');
+  btn.textContent = 'Copied!';
+  setTimeout(() => btn.textContent = 'Copy & Bookmark', 2000);
+}
+
 // ── SHARE ──
 function shareList(type) {
   const data = type === 'collection' ? collection : wantlist;
@@ -1326,8 +1465,8 @@ function shareList(type) {
     showToast(type === 'collection' ? 'Your collection is empty!' : 'Your wantlist is empty!');
     return;
   }
-  const payload = btoa(JSON.stringify({ type, records: data }));
-  const url = window.location.href.split('#')[0] + '#share=' + payload;
+  // Share link is just their personal URL — live data, always up to date
+  const url = getMyUrl() + (type === 'wantlist' ? '&view=wantlist' : '');
   document.getElementById('shareUrlInput').value = url;
   document.getElementById('shareModalEyebrow').textContent = type === 'collection' ? 'Share Your Collection' : 'Share Your Wantlist';
   document.getElementById('shareModalTitle').textContent = type === 'collection'
@@ -1358,32 +1497,45 @@ document.getElementById('shareOverlay').addEventListener('click', function(e) {
   if (e.target === this) closeShareModal();
 });
 
-// ── SHARED VIEW (read from URL hash) ──
-function checkSharedView() {
-  const hash = window.location.hash;
-  if (!hash.startsWith('#share=')) return;
+// ── SHARED VIEW (read from ?id= param) ──
+async function checkSharedView() {
+  const params = new URLSearchParams(window.location.search);
+  const sharedId = params.get('id');
+  const viewType = params.get('view') || 'collection';
+
+  // If it's the current user's own ID, just load normally
+  if (!sharedId || sharedId === userId) return;
+
+  // It's someone else's link — load their data read-only
   try {
-    const payload = JSON.parse(atob(hash.slice(7)));
-    const { type, records } = payload;
+    const res = await fetch(`/.netlify/functions/get-collection?id=${sharedId}`);
+    if (!res.ok) throw new Error('not found');
+    const data = await res.json();
+    const records = viewType === 'wantlist' ? (data.wantlist || []) : (data.collection || []);
+
+    // Hide personal UI
+    document.getElementById('myLinkBar').style.display = 'none';
+    document.querySelector('.stats-bar').style.display = 'none';
+    document.querySelectorAll('.nav-btn').forEach(b => b.style.display = 'none');
+
     // Inject banner
     const banner = document.createElement('div');
     banner.className = 'shared-banner';
-    banner.innerHTML = `👁 You're viewing someone's <strong>${type === 'collection' ? 'Record Collection' : 'Wantlist'}</strong> — ${records.length} record${records.length !== 1 ? 's' : ''}`;
+    banner.innerHTML = `👁 You're viewing someone's <strong>${viewType === 'wantlist' ? 'Wantlist' : 'Record Collection'}</strong> — ${records.length} record${records.length !== 1 ? 's' : ''}`;
     document.querySelector('header').insertAdjacentElement('afterend', banner);
-    // Hide nav browse/collection controls, show shared read-only grid
-    document.querySelectorAll('.nav-btn').forEach(b => b.style.display = 'none');
-    document.querySelector('.stats-bar').style.display = 'none';
-    // Render read-only list
+
+    // Render read-only
     document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
     const panel = document.getElementById('panel-collection');
     panel.classList.add('active');
     panel.querySelector('.coll-header').innerHTML = `
       <div>
-        <div class="section-eyebrow">${type === 'collection' ? 'Shared Collection' : 'Shared Wantlist'}</div>
+        <div class="section-eyebrow">${viewType === 'wantlist' ? 'Shared Wantlist' : 'Shared Collection'}</div>
         <div class="section-h1">${records.length} Record${records.length !== 1 ? 's' : ''}</div>
       </div>`;
+
     if (!records.length) {
-      panel.querySelector('#collectionContent').innerHTML = '<div class="empty-state"><div class="empty-h">Nothing here yet</div></div>';
+      panel.querySelector('#collectionContent').innerHTML = '<div class="empty-state"><div class="empty-disc">🎵</div><div class="empty-h">Nothing here yet</div></div>';
       return;
     }
     panel.querySelector('#collectionContent').innerHTML = `
@@ -1391,7 +1543,7 @@ function checkSharedView() {
         <thead><tr><th></th><th>Album</th><th>Year</th><th>Genre</th><th>Avg Price</th></tr></thead>
         <tbody>
         ${records.map(r => {
-          const p = PALETTES[(r.pi||r.paletteIdx||0) % 10];
+          const p = PALETTES[(r.pi || 0) % 10];
           return `<tr>
             <td><div class="t-thumb" style="background:${p.bg}">🎵</div></td>
             <td><div class="t-artist">${esc(r.artist)}</div><div class="t-title">${esc(r.title)}</div></td>
@@ -1403,12 +1555,35 @@ function checkSharedView() {
         </tbody>
       </table>`;
   } catch(e) {
-    console.warn('Invalid share link', e);
+    console.warn('Could not load shared collection', e);
   }
 }
 
+async function init() {
+  // Set personal link in bar
+  document.getElementById('myLinkInput').value = getMyUrl();
+
+  renderGenrePills();
+  renderGrid([...CATALOG]);
+  updateStats();
+  updateWantTab();
+
+  // Load from cloud (overrides localStorage if newer data exists)
+  await cloudLoad();
+
+  // Re-render with loaded data
+  renderGrid([...CATALOG]);
+  renderCollection();
+  renderWantlist();
+  updateStats();
+  updateWantTab();
+  setSyncState('saved');
+
+  // Check if viewing someone else's link
+  await checkSharedView();
+}
+
 init();
-checkSharedView();
 </script>
 </body>
 </html>
