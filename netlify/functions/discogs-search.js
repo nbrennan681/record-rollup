@@ -48,12 +48,16 @@ exports.handler = async function (event) {
           );
           if (!priceRes.ok) return item;
           const prices = await priceRes.json();
-          // Average the suggested prices across all conditions
-          const values = Object.values(prices)
-            .map(p => p?.value)
-            .filter(v => typeof v === 'number' && v > 0);
-          const avgPrice = values.length
-            ? Math.round(values.reduce((a, b) => a + b, 0) / values.length)
+          // Weight towards NM and VG+ — the standard vinyl trading grades
+          // Give NM 3x weight, VG+ 3x, VG 1x, ignore G and M (outliers)
+          const weighted = [
+            prices['Mint (M)']?.value,
+            prices['Near Mint (NM or M-)']?.value * 3,
+            prices['Very Good Plus (VG+)']?.value * 3,
+            prices['Very Good (VG)']?.value,
+          ].filter(v => typeof v === 'number' && v > 0);
+          const avgPrice = weighted.length
+            ? Math.round(weighted.reduce((a, b) => a + b, 0) / weighted.length)
             : null;
           return {
             ...item,
