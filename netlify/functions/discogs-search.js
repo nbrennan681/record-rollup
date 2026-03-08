@@ -24,14 +24,11 @@ exports.handler = async function (event) {
   }
 
   function normaliseTitle(raw) {
-    // Extract just the album title portion from "Artist - Title" strings
     let title = raw || '';
-    if (title.includes(' - ')) {
-      title = title.split(' - ').slice(1).join(' - ');
-    }
+    if (title.includes(' - ')) title = title.split(' - ').slice(1).join(' - ');
     return title.toLowerCase()
-      .replace(/\s*\(\d+\)\s*/g, '')   // remove (year) disambiguators
-      .replace(/[^a-z0-9\s]/g, '')     // strip punctuation
+      .replace(/\s*\(\d+\)\s*/g, '')
+      .replace(/[^a-z0-9\s]/g, '')
       .replace(/\s+/g, ' ')
       .trim();
   }
@@ -41,74 +38,56 @@ exports.handler = async function (event) {
       `https://api.discogs.com/marketplace/price_suggestions/${releaseId}`
     );
     if (!suggestions) return null;
-
     const nm  = suggestions['Near Mint (NM or M-)']?.value;
     const vgp = suggestions['Very Good Plus (VG+)']?.value;
     const vg  = suggestions['Very Good (VG)']?.value;
-
     const weighted = [
       ...(nm  ? [nm,  nm,  nm ]  : []),
       ...(vgp ? [vgp, vgp, vgp]  : []),
       ...(vg  ? [vg]             : []),
     ].filter(v => typeof v === 'number' && v > 0);
-
     return weighted.length
       ? Math.round(weighted.reduce((a, b) => a + b, 0) / weighted.length)
       : null;
   }
 
   try {
-    // Search masters (canonical albums) and releases in parallel
-    const [masterData, releaseData] = await Promise.all([
-      discogsFetch(`https://api.discogs.com/database/search?q=${encodeURIComponent(query)}&type=master&per_page=25`),
-      discogsFetch(`https://api.discogs.com/database/search?q=${encodeURIComponent(query)}&type=release&format=vinyl&per_page=25`),
-    ]);
+    // Single search — masters only, which already deduplicates pressings
+    const data = await discogsFetch(
+      `https://api.discogs.com/database/search?q=${encodeURIComponent(query)}&type=master&per_page=25`
+    );
 
-    const masters  = (masterData?.results  || []).map(r => ({ ...r, _type: 'master'  }));
-    const releases = (releaseData?.results || []).map(r => ({ ...r, _type: 'release' }));
+    const results = data?.results || [];
 
-    // Deduplicate by album title only — ignore artist/year variations
+    // Deduplicate by title
     const seen = new Set();
-    const combined = [];
-    for (const item of [...masters, ...releases]) {
+    const unique = [];
+    for (const item of results) {
       const key = normaliseTitle(item.title);
       if (!key || seen.has(key)) continue;
       seen.add(key);
-      combined.push(item);
+      unique.push(item);
     }
 
-    // Enrich top 10 with real pricing
+    // Only fetch pricing for top 3 — masters include main_release in search results
+    // so we can skip the extra master detail call
     const enriched = await Promise.all(
-      combined.slice(0, 10).map(async (item) => {
-        let releaseId = item.id;
-        let avg_price = null;
-
-        try {
-          if (item._type === 'master') {
-            // Get the canonical main release for this master
-            const masterDetail = await discogsFetch(`https://api.discogs.com/masters/${item.id}`);
-            if (masterDetail?.main_release) {
-              releaseId = masterDetail.main_release;
-            }
-          }
-          avg_price = await getPriceForRelease(releaseId);
-        } catch { /* keep null */ }
-
-        return {
-          ...item,
-          avg_price,
-          has_real_price: avg_price !== null,
-        };
+      unique.slice(0, 3).map(async (item) => {
+        // Discogs master search results include main_release directly
+        const releaseId = item.main_release || item.id;
+        const avg_price = await getPriceForRelease(releaseId);
+        return { ...item, avg_price, has_real_price: avg_price !== null };
       })
     );
 
-    const final = [...enriched, ...combined.slice(10)];
+    const final = [...enriched, ...unique.slice(3)];
 
     return {
       statusCode: 200,
       headers: {
         'Content-Type': 'application/json',
         'Access-Control-Allow-Origin': '*',
+        'Cache-Control': 'public, max-age=300', // cache 5 mins
       },
       body: JSON.stringify({ results: final }),
     };
