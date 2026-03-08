@@ -987,6 +987,7 @@ let aiResults = [];
 let currentGenre = "All";
 let searchTimer = null;
 let currentQuery = "";
+let lastGridResults = [...CATALOG];
 
 // ── INIT ──
 function init() {
@@ -1124,7 +1125,8 @@ function estimateVinylPrice(genre, year) {
 
 // ── GRID ──
 function renderGrid(records) {
-  const src = records !== undefined ? records : [];
+  if (records !== undefined) lastGridResults = records;
+  const src = lastGridResults;
   const q = currentQuery.toLowerCase();
   const filtered = src.filter(r => {
     // Only show records with real cover art
