@@ -1568,8 +1568,8 @@ async function loadFeatured() {
           id: item.id || (80000 + i),
           artist, title, year, genre,
           label: item.label?.[0] || '',
-          avgPrice: estimateVinylPrice(genre, year),
-          hasRealPrice: false,
+          avgPrice: item.has_real_price ? item.avg_price : estimateVinylPrice(genre, year),
+          hasRealPrice: item.has_real_price || false,
           thumb: item.cover_image,
           pi: i % 10,
         };
