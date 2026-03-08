@@ -1057,17 +1057,30 @@ async function discogsProxySearch(query) {
   document.getElementById('loadingRow').style.display = 'flex';
   document.getElementById('loadingText').textContent = 'Searching Discogs…';
   try {
-    const res = await fetch(`/.netlify/functions/discogs-search?q=${encodeURIComponent(query)}`);
-    if (!res.ok) throw new Error('proxy error ' + res.status);
+    const DISCOGS_TOKEN = 'YOUR_DISCOGS_TOKEN_HERE'; // replace with your token
+    const res = await fetch(
+      `https://api.discogs.com/database/search?q=${encodeURIComponent(query)}&type=master&per_page=25`,
+      { headers: {
+        'Authorization': `Discogs token=${DISCOGS_TOKEN}`,
+        'User-Agent': 'RecordRollup/1.0',
+      }}
+    );
+    if (!res.ok) throw new Error('discogs error ' + res.status);
     const data = await res.json();
 
+    function normaliseTitle(raw) {
+      let t = raw || '';
+      if (t.includes(' - ')) t = t.split(' - ').slice(1).join(' - ');
+      return t.toLowerCase().replace(/\s*\(\d+\)\s*/g,'').replace(/[^a-z0-9\s]/g,'').trim();
+    }
+
     const seen = new Set();
-    const discogsResults = (data.results || [])
+    const results = (data.results || [])
       .filter(item => {
-        const key = item.title?.toLowerCase();
+        const key = normaliseTitle(item.title);
         if (!key || seen.has(key)) return false;
         seen.add(key);
-        return true;
+        return item.cover_image && !item.cover_image.includes('spacer');
       })
       .map((item, i) => {
         let artist = 'Unknown Artist', title = item.title || 'Unknown';
@@ -1078,34 +1091,24 @@ async function discogsProxySearch(query) {
         }
         const genre = item.genre?.[0] || item.style?.[0] || 'Unknown';
         const year  = parseInt(item.year) || 0;
-        // Use real Discogs average market price when available, fall back to estimate
-        const realPrice = item.avg_price ? Math.round(item.avg_price) : null;
-        const avgPrice = realPrice || estimateVinylPrice(genre, year);
-        const numForSale = item.num_for_sale || 0;
-        const priceRange = numForSale > 0
-          ? `${numForSale} listing${numForSale !== 1 ? 's' : ''} on Discogs`
-          : null;
+        const avgPrice = estimateVinylPrice(genre, year);
         return {
           id: item.id || (90000 + Date.now() + i),
           artist, title, year, genre,
           label: item.label?.[0] || '',
           avgPrice,
-          priceRange,
-          hasRealPrice: !!(item.has_real_price || item.avg_price),
-          thumb: item.cover_image || item.thumb || '',
+          hasRealPrice: false,
+          thumb: item.cover_image || '',
           pi: i % 10
         };
       });
 
-    // Only show results with real cover art
-    const withCovers = discogsResults.filter(r => r.thumb && !r.thumb.includes('spacer'));
     document.getElementById('loadingRow').style.display = 'none';
-    renderGrid(withCovers);
+    renderGrid(results);
   } catch (e) {
     document.getElementById('loadingRow').style.display = 'none';
-    // If rate limited, show a subtle notice but keep local results visible
     if (e.message.includes('429')) {
-      document.getElementById('loadingText').textContent = 'Discogs rate limit reached — showing local results';
+      document.getElementById('loadingText').textContent = 'Rate limit reached — try again in a moment';
       document.getElementById('loadingRow').style.display = 'flex';
       setTimeout(() => { document.getElementById('loadingRow').style.display = 'none'; }, 3000);
     }
@@ -1395,7 +1398,7 @@ function setSyncState(state) {
 async function cloudSave() {
   setSyncState('saving');
   try {
-    const res = await fetch('/.netlify/functions/save-collection', {
+    const res = await fetch('/api/save-collection', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ userId, collection, wantlist, conditions }),
@@ -1409,7 +1412,7 @@ async function cloudSave() {
 
 async function cloudLoad() {
   try {
-    const res = await fetch(`/.netlify/functions/get-collection?id=${userId}`);
+    const res = await fetch(`/api/get-collection?id=${userId}`);
     if (!res.ok) return;
     const data = await res.json();
     if (data.collection) collection = data.collection;
@@ -1512,7 +1515,7 @@ async function checkSharedView() {
 
   // It's someone else's link — load their data read-only
   try {
-    const res = await fetch(`/.netlify/functions/get-collection?id=${sharedId}`);
+    const res = await fetch(`/api/get-collection?id=${sharedId}`);
     if (!res.ok) throw new Error('not found');
     const data = await res.json();
     const records = viewType === 'wantlist' ? (data.wantlist || []) : (data.collection || []);
@@ -1567,11 +1570,21 @@ async function loadFeatured() {
   document.getElementById('loadingRow').style.display = 'flex';
   document.getElementById('loadingText').textContent = 'Loading popular vinyl…';
   try {
-    const res = await fetch('/.netlify/functions/featured-records');
-    if (!res.ok) throw new Error('featured fetch failed');
+    const DISCOGS_TOKEN = 'YOUR_DISCOGS_TOKEN_HERE'; // replace with your token
+    const queries = ['jazz', 'hip-hop', 'soul', 'indie rock', 'electronic', 'classic rock'];
+    const pick = queries[Math.floor(Date.now() / (1000 * 60 * 60 * 6)) % queries.length];
+    const res = await fetch(
+      `https://api.discogs.com/database/search?q=${encodeURIComponent(pick)}&type=master&format=vinyl&sort=have&sort_order=desc&per_page=48`,
+      { headers: {
+        'Authorization': `Discogs token=${DISCOGS_TOKEN}`,
+        'User-Agent': 'RecordRollup/1.0',
+      }}
+    );
+    if (!res.ok) throw new Error('discogs error');
     const data = await res.json();
     featuredRecords = (data.results || [])
       .filter(item => item.cover_image && !item.cover_image.includes('spacer'))
+      .slice(0, 36)
       .map((item, i) => {
         let artist = 'Unknown Artist', title = item.title || 'Unknown';
         if (item.title?.includes(' - ')) {
@@ -1581,14 +1594,12 @@ async function loadFeatured() {
         }
         const genre = item.genre?.[0] || item.style?.[0] || 'Unknown';
         const year  = parseInt(item.year) || 0;
-        const realPrice = item.avg_price ? Math.round(item.avg_price) : null;
-        const avgPrice  = realPrice || estimateVinylPrice(genre, year);
         return {
           id: item.id || (80000 + i),
           artist, title, year, genre,
           label: item.label?.[0] || '',
-          avgPrice,
-          hasRealPrice: !!(item.has_real_price || item.avg_price),
+          avgPrice: estimateVinylPrice(genre, year),
+          hasRealPrice: false,
           thumb: item.cover_image,
           pi: i % 10,
         };
@@ -1597,7 +1608,6 @@ async function loadFeatured() {
     renderGrid(featuredRecords);
   } catch (e) {
     document.getElementById('loadingRow').style.display = 'none';
-    // If function not available, show empty state
     document.getElementById('recordsGrid').innerHTML = `
       <div style="grid-column:1/-1;padding:64px 0;text-align:center;color:rgba(245,234,216,0.3)">
         <div style="font-size:36px;margin-bottom:16px">🎵</div>
