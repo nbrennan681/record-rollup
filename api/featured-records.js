@@ -59,15 +59,28 @@ export default async function handler(req, res) {
     } catch { return null; }
   }
 
-  async function getPrice(releaseId) {
+  function estimatePrice(genre, year) {
+    let base = 22;
+    if (year && year < 1965) base = 70;
+    else if (year && year < 1975) base = 48;
+    else if (year && year < 1985) base = 35;
+    else if (year && year < 1995) base = 25;
+    else if (year && year >= 2015) base = 30;
+    if (/jazz|blues/i.test(genre))    base = Math.round(base * 1.4);
+    if (/soul|funk|r&b/i.test(genre)) base = Math.round(base * 1.2);
+    if (/hip.hop|rap/i.test(genre))   base = Math.round(base * 1.15);
+    return base;
+  }
+
+  async function getPrice(releaseId, genre, year) {
     try {
       if (consumerKey && consumerSecret) {
         const url = `https://api.discogs.com/marketplace/price_suggestions/${releaseId}`;
         const suggestions = await discogsFetch(url, true);
-        if (suggestions) {
+        if (suggestions && typeof suggestions === 'object' && !suggestions.message) {
           const vgPlus = suggestions['Very Good Plus (VG+)']?.value;
-          const nm = suggestions['Near Mint (NM or M-)']?.value;
-          const vg = suggestions['Very Good (VG)']?.value;
+          const nm    = suggestions['Near Mint (NM or M-)']?.value;
+          const vg    = suggestions['Very Good (VG)']?.value;
           const price = vgPlus || nm || vg;
           if (price && price > 0) return { price: Math.round(price), label: 'VG+' };
         }
@@ -75,10 +88,11 @@ export default async function handler(req, res) {
       const stats = await discogsFetch(
         `https://api.discogs.com/marketplace/stats/${releaseId}?curr_abbr=USD`
       );
-      if (!stats || stats.blocked_from_sale) return null;
-      const lowest = stats.lowest_price?.value;
-      return (lowest && lowest > 0) ? { price: Math.round(lowest), label: 'mkt' } : null;
-    } catch { return null; }
+      if (stats && !stats.blocked_from_sale && stats.lowest_price?.value > 0) {
+        return { price: Math.round(stats.lowest_price.value), label: 'mkt' };
+      }
+    } catch { /* fall through */ }
+    return { price: estimatePrice(genre, year), label: 'est' };
   }
 
   async function batchPrices(items, batchSize = 5) {
@@ -87,12 +101,14 @@ export default async function handler(req, res) {
       const batch = items.slice(i, i + batchSize);
       const batchResults = await Promise.all(
         batch.map(async item => {
-          const result = await getPrice(item.id);
+          const genre = item.genre?.[0] || item.style?.[0] || '';
+          const year  = parseInt(item.year) || 0;
+          const result = await getPrice(item.id, genre, year);
           return {
             ...item,
-            avg_price: result?.price ?? null,
-            price_label: result?.label ?? null,
-            has_real_price: result !== null,
+            avg_price: result.price,
+            price_label: result.label,
+            has_real_price: result.label !== 'est',
           };
         })
       );
@@ -127,7 +143,7 @@ export default async function handler(req, res) {
       .slice(0, 20);
 
     const withPrices = await batchPrices(unique);
-    const results = withPrices.filter(item => item.has_real_price);
+    const results = withPrices; // All records shown — est/mkt/VG+ labeled accordingly
 
     res.setHeader('Cache-Control', 'public, max-age=3600');
     return res.status(200).json({ results });
