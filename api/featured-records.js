@@ -22,62 +22,20 @@ export default async function handler(req, res) {
     'Accept': 'application/json',
   };
 
-  async function discogsFetch(url) {
-    try {
-      const r = await fetch(url, { headers });
-      if (!r.ok) return null;
-      return r.json();
-    } catch { return null; }
-  }
-
-  async function getPrice(releaseId, genre, year) {
-    try {
-      const stats = await discogsFetch(
-        `https://api.discogs.com/marketplace/stats/${releaseId}?curr_abbr=USD`
-      );
-      if (stats && !stats.blocked_from_sale && stats.num_for_sale >= 3 && stats.lowest_price?.value > 0) {
-        return { price: Math.round(stats.lowest_price.value), label: 'from' };
-      }
-    } catch { /* fall through */ }
-    return { price: estimateVinylPrice(genre, year), label: 'est' };
-  }
-
-  async function batchPrices(items, batchSize = 5) {
-    const results = [];
-    for (let i = 0; i < items.length; i += batchSize) {
-      const batch = items.slice(i, i + batchSize);
-      const batchResults = await Promise.all(
-        batch.map(async item => {
-          const genre = item.genre?.[0] || item.style?.[0] || '';
-          const year  = parseInt(item.year) || 0;
-          const result = await getPrice(item.id, genre, year);
-          return {
-            ...item,
-            avg_price: result.price,
-            price_label: result.label,
-            has_real_price: result.label === 'from',
-          };
-        })
-      );
-      results.push(...batchResults);
-      if (i + batchSize < items.length) {
-        await new Promise(r => setTimeout(r, 200));
-      }
-    }
-    return results;
-  }
-
   const queries = ['jazz', 'hip-hop', 'soul', 'indie rock', 'electronic', 'classic rock'];
   const pick = queries[Math.floor(Date.now() / (1000 * 60 * 60 * 6)) % queries.length];
 
   try {
-    const data = await discogsFetch(
-      `https://api.discogs.com/database/search?q=${encodeURIComponent(pick)}&type=release&format=vinyl&sort=have&sort_order=desc&per_page=60`
+    const r = await fetch(
+      `https://api.discogs.com/database/search?q=${encodeURIComponent(pick)}&type=release&format=vinyl&sort=have&sort_order=desc&per_page=60`,
+      { headers }
     );
-    if (!data) throw new Error('Discogs fetch failed');
+    if (!r.ok) throw new Error('Discogs error ' + r.status);
+    const data = await r.json();
 
+    // Deduplicate by title for homepage variety
     const seen = new Set();
-    const unique = (data.results || [])
+    const results = (data.results || [])
       .filter(item => {
         if (!item.cover_image || item.cover_image.includes('spacer')) return false;
         let titlePart = item.title || '';
@@ -87,9 +45,17 @@ export default async function handler(req, res) {
         seen.add(key);
         return true;
       })
-      .slice(0, 20);
-
-    const results = await batchPrices(unique);
+      .slice(0, 24)
+      .map(item => {
+        const genre = item.genre?.[0] || item.style?.[0] || '';
+        const year  = parseInt(item.year) || 0;
+        return {
+          ...item,
+          avg_price: estimateVinylPrice(genre, year),
+          price_label: 'est',
+          has_real_price: false,
+        };
+      });
 
     res.setHeader('Cache-Control', 'public, max-age=3600');
     return res.status(200).json({ results });
