@@ -1027,12 +1027,15 @@ function onSearch(val) {
   currentQuery = val.trim();
   clearTimeout(searchTimer);
   if (!currentQuery || currentQuery.length < 2) {
+    document.getElementById('loadingRow').style.display = 'none';
     renderGrid(featuredRecords);
     return;
   }
-  // Show local results instantly while Discogs loads
-  renderGrid(localSearch(currentQuery));
-  searchTimer = setTimeout(() => discogsProxySearch(currentQuery), 350);
+  // Clear grid and show spinner — only show records with real Discogs median prices
+  document.getElementById('recordsGrid').innerHTML = '';
+  document.getElementById('loadingRow').style.display = 'flex';
+  document.getElementById('loadingText').textContent = 'Searching Discogs…';
+  searchTimer = setTimeout(() => discogsProxySearch(currentQuery), 400);
 }
 
 function localSearch(query) {
@@ -1054,13 +1057,12 @@ function localSearch(query) {
 }
 
 async function discogsProxySearch(query) {
-  document.getElementById('loadingRow').style.display = 'flex';
-  document.getElementById('loadingText').textContent = 'Searching Discogs…';
   try {
     const res = await fetch(`/api/discogs-search?q=${encodeURIComponent(query)}`);
     if (!res.ok) throw new Error('search error ' + res.status);
     const data = await res.json();
 
+    // All results from the API already have real median prices — no estimates
     const mapped = (data.results || []).map((item, i) => {
       let artist = 'Unknown Artist', title = item.title || 'Unknown';
       if (item.title?.includes(' - ')) {
@@ -1070,26 +1072,37 @@ async function discogsProxySearch(query) {
       }
       const genre = item.genre?.[0] || item.style?.[0] || 'Unknown';
       const year  = parseInt(item.year) || 0;
-      const realPrice = item.avg_price ? Math.round(item.avg_price) : null;
       return {
         id: item.id || (90000 + i),
         artist, title, year, genre,
         label: item.label?.[0] || '',
-        avgPrice: realPrice || estimateVinylPrice(genre, year),
-        hasRealPrice: !!(item.has_real_price || realPrice),
+        avgPrice: Math.round(item.avg_price),
+        hasRealPrice: true,
         thumb: item.cover_image || '',
         pi: i % 10,
       };
     });
 
     document.getElementById('loadingRow').style.display = 'none';
+
+    if (!mapped.length) {
+      document.getElementById('recordsGrid').innerHTML = `
+        <div style="grid-column:1/-1;padding:64px 0;text-align:center;color:rgba(245,234,216,0.3)">
+          <div style="font-size:36px;margin-bottom:16px">&#127902;</div>
+          <div style="font-family:'Playfair Display',serif;font-size:20px;font-style:italic;margin-bottom:8px;color:rgba(245,234,216,0.45)">No vinyl found with sales data</div>
+          <div style="font-family:'DM Mono',monospace;font-size:10px;letter-spacing:1px">Try a different search — we only show records with real Discogs sale history</div>
+        </div>`;
+      return;
+    }
+
     renderGrid(mapped);
   } catch (e) {
     document.getElementById('loadingRow').style.display = 'none';
     if (e.message.includes('429')) {
-      document.getElementById('loadingText').textContent = 'Rate limit reached — try again in a moment';
-      document.getElementById('loadingRow').style.display = 'flex';
-      setTimeout(() => { document.getElementById('loadingRow').style.display = 'none'; }, 3000);
+      document.getElementById('recordsGrid').innerHTML = `
+        <div style="grid-column:1/-1;padding:48px 0;text-align:center;color:rgba(200,135,58,0.6);font-family:'DM Mono',monospace;font-size:11px;letter-spacing:1px">
+          Rate limit reached — wait a moment and try again
+        </div>`;
     }
   }
 }
@@ -1158,7 +1171,7 @@ function renderGrid(records) {
         <div class="card-artist">${esc(r.artist)}</div>
         <div class="card-title">${esc(r.title)}</div>
         <div class="card-meta">
-          <span class="card-price">${r.avgPrice ? '$'+r.avgPrice : '—'}<span style="font-size:8px;opacity:0.45;margin-left:3px">${r.hasRealPrice ? 'median' : 'est'}</span></span>
+          <span class="card-price">${r.avgPrice ? '$'+r.avgPrice : '—'}<span style="font-size:8px;opacity:0.45;margin-left:3px">${r.hasRealPrice ? 'median' : ''}</span></span>
           ${r.priceRange ? `<span style="font-family:'DM Mono',monospace;font-size:8px;color:rgba(245,234,216,0.3);display:block;margin-top:1px">${r.priceRange}</span>` : ''}
           <span class="card-yr">${r.year || ''}</span>
         </div>
