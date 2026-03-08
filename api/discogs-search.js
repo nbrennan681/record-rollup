@@ -21,8 +21,7 @@ export default async function handler(req, res) {
     } catch { return null; }
   }
 
-  // Returns ONLY the median from completed sales. Never falls back to listing price.
-  // Returns null if the release has no all-time sales history.
+  // Returns ONLY the median from completed sales. null = no sales history.
   async function getMedianPrice(releaseId) {
     try {
       const stats = await discogsFetch(
@@ -34,27 +33,39 @@ export default async function handler(req, res) {
     } catch { return null; }
   }
 
+  // Process in batches of 5 to avoid hammering Discogs rate limits (60 req/min)
+  async function batchMedianPrices(items, batchSize = 5) {
+    const results = [];
+    for (let i = 0; i < items.length; i += batchSize) {
+      const batch = items.slice(i, i + batchSize);
+      const batchResults = await Promise.all(
+        batch.map(async item => {
+          const median = await getMedianPrice(item.id);
+          return { ...item, avg_price: median, has_real_price: median !== null };
+        })
+      );
+      results.push(...batchResults);
+      // Small delay between batches to respect rate limits
+      if (i + batchSize < items.length) {
+        await new Promise(r => setTimeout(r, 200));
+      }
+    }
+    return results;
+  }
+
   try {
-    // type=release + format=vinyl ensures we get specific vinyl pressing IDs
-    // (not master IDs) which are required for marketplace/stats to work
     const data = await discogsFetch(
       `https://api.discogs.com/database/search?q=${encodeURIComponent(query)}&type=release&format=vinyl&per_page=50`
     );
 
-    // Filter to results that have cover art — keep ALL variants/pressings (no deduplication)
+    // Keep all variants/pressings — filter only for cover art
     const candidates = (data?.results || [])
       .filter(item => item.cover_image && !item.cover_image.includes('spacer'))
-      .slice(0, 30); // Cap at 30 to stay within Vercel timeout
+      .slice(0, 20); // 20 candidates → 4 batches of 5, well within rate limits
 
-    // Fetch real median prices for all candidates in parallel
-    const withPrices = await Promise.all(
-      candidates.map(async item => {
-        const median = await getMedianPrice(item.id);
-        return { ...item, avg_price: median, has_real_price: median !== null };
-      })
-    );
+    const withPrices = await batchMedianPrices(candidates);
 
-    // Only return records that have actual completed sale history
+    // Only return records with real completed-sale median prices
     const results = withPrices.filter(item => item.has_real_price);
 
     res.setHeader('Cache-Control', 'public, max-age=300');
