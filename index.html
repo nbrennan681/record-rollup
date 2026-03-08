@@ -1586,43 +1586,6 @@ async function loadFeatured() {
       </div>`;
   }
 }
-    );
-    if (!res.ok) throw new Error('discogs error');
-    const data = await res.json();
-    featuredRecords = (data.results || [])
-      .filter(item => item.cover_image && !item.cover_image.includes('spacer'))
-      .slice(0, 36)
-      .map((item, i) => {
-        let artist = 'Unknown Artist', title = item.title || 'Unknown';
-        if (item.title?.includes(' - ')) {
-          const parts = item.title.split(' - ');
-          artist = parts[0].replace(/\s*\(\d+\)\s*$/, '').trim();
-          title  = parts.slice(1).join(' - ').trim();
-        }
-        const genre = item.genre?.[0] || item.style?.[0] || 'Unknown';
-        const year  = parseInt(item.year) || 0;
-        return {
-          id: item.id || (80000 + i),
-          artist, title, year, genre,
-          label: item.label?.[0] || '',
-          avgPrice: estimateVinylPrice(genre, year),
-          hasRealPrice: false,
-          thumb: item.cover_image,
-          pi: i % 10,
-        };
-      });
-    document.getElementById('loadingRow').style.display = 'none';
-    renderGrid(featuredRecords);
-  } catch (e) {
-    document.getElementById('loadingRow').style.display = 'none';
-    document.getElementById('recordsGrid').innerHTML = `
-      <div style="grid-column:1/-1;padding:64px 0;text-align:center;color:rgba(245,234,216,0.3)">
-        <div style="font-size:36px;margin-bottom:16px">🎵</div>
-        <div style="font-family:'Playfair Display',serif;font-size:20px;font-style:italic;margin-bottom:8px;color:rgba(245,234,216,0.45)">Search for any record above</div>
-        <div style="font-family:'DM Mono',monospace;font-size:10px;letter-spacing:1px">Artist, album title, label…</div>
-      </div>`;
-  }
-}
 
 async function init() {
   // Set personal link in bar
