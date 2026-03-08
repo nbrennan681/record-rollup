@@ -1077,6 +1077,7 @@ async function discogsProxySearch(query) {
         artist, title, year, genre,
         label: item.label?.[0] || '',
         avgPrice: Math.round(item.avg_price),
+        priceLabel: item.price_label || 'mkt',
         hasRealPrice: true,
         thumb: item.cover_image || '',
         pi: i % 10,
@@ -1171,7 +1172,7 @@ function renderGrid(records) {
         <div class="card-artist">${esc(r.artist)}</div>
         <div class="card-title">${esc(r.title)}</div>
         <div class="card-meta">
-          <span class="card-price">${r.avgPrice ? '$'+r.avgPrice : '—'}<span style="font-size:8px;opacity:0.45;margin-left:3px">${r.hasRealPrice ? 'median' : ''}</span></span>
+          <span class="card-price">${r.avgPrice ? '$'+r.avgPrice : '—'}<span style="font-size:8px;opacity:0.45;margin-left:3px">${r.hasRealPrice ? (r.priceLabel || 'mkt') : ''}</span></span>
           ${r.priceRange ? `<span style="font-family:'DM Mono',monospace;font-size:8px;color:rgba(245,234,216,0.3);display:block;margin-top:1px">${r.priceRange}</span>` : ''}
           <span class="card-yr">${r.year || ''}</span>
         </div>
@@ -1582,6 +1583,7 @@ async function loadFeatured() {
           artist, title, year, genre,
           label: item.label?.[0] || '',
           avgPrice: item.has_real_price ? item.avg_price : estimateVinylPrice(genre, year),
+          priceLabel: item.price_label || 'mkt',
           hasRealPrice: item.has_real_price || false,
           thumb: item.cover_image,
           pi: i % 10,
