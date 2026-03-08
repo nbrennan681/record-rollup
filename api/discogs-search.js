@@ -44,8 +44,8 @@ export default async function handler(req, res) {
       if (!item.cover_image || item.cover_image.includes('spacer')) return false;
       let titlePart = item.title || '';
       if (titlePart.includes(' - ')) titlePart = titlePart.split(' - ').slice(1).join(' - ');
-      const key = titlePart.toLowerCase().replace(/[^a-z0-9]/g, '').trim()
-        + '_' + (item.year || '0');
+      // Dedupe by title only — suppress reprints/reissues of same album
+      const key = titlePart.toLowerCase().replace(/[^a-z0-9]/g, '').trim();
       if (seen.has(key)) return false;
       seen.add(key);
       return true;
