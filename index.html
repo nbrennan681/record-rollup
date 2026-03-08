@@ -1053,58 +1053,91 @@ function localSearch(query) {
   return scored.map(x => x.r);
 }
 
+// Single token reference — replace with your Discogs token
+const DISCOGS_TOKEN = 'YOUR_DISCOGS_TOKEN_HERE';
+
+async function fetchDiscogsPrice(releaseId) {
+  try {
+    const res = await fetch(
+      `https://api.discogs.com/marketplace/stats/${releaseId}?curr_abbr=USD`,
+      { headers: { 'Authorization': `Discogs token=${DISCOGS_TOKEN}`, 'User-Agent': 'RecordRollup/1.0' }}
+    );
+    if (!res.ok) return null;
+    const stats = await res.json();
+    if (stats.blocked_from_sale) return null;
+    // median is the real completed-sale median price
+    const median = stats.median?.value ?? null;
+    if (median && median > 0) return Math.round(median);
+    // fall back to lowest active listing if no sale history yet
+    const lowest = stats.lowest_price?.value ?? null;
+    return lowest && lowest > 0 ? Math.round(lowest) : null;
+  } catch { return null; }
+}
+
 async function discogsProxySearch(query) {
   document.getElementById('loadingRow').style.display = 'flex';
   document.getElementById('loadingText').textContent = 'Searching Discogs…';
   try {
-    const DISCOGS_TOKEN = 'nedFGNiaotNFPLWjwawpnMOxWWFHqiIAMsoQfbtr'; // replace with your token
+    // Search vinyl releases — shows all pressings with real cover art
     const res = await fetch(
-      `https://api.discogs.com/database/search?q=${encodeURIComponent(query)}&type=master&per_page=25`,
-      { headers: {
-        'Authorization': `Discogs token=${DISCOGS_TOKEN}`,
-        'User-Agent': 'RecordRollup/1.0',
-      }}
+      `https://api.discogs.com/database/search?q=${encodeURIComponent(query)}&type=release&format=vinyl&per_page=50`,
+      { headers: { 'Authorization': `Discogs token=${DISCOGS_TOKEN}`, 'User-Agent': 'RecordRollup/1.0' }}
     );
     if (!res.ok) throw new Error('discogs error ' + res.status);
     const data = await res.json();
 
-    function normaliseTitle(raw) {
-      let t = raw || '';
-      if (t.includes(' - ')) t = t.split(' - ').slice(1).join(' - ');
-      return t.toLowerCase().replace(/\s*\(\d+\)\s*/g,'').replace(/[^a-z0-9\s]/g,'').trim();
-    }
-
+    // Deduplicate by title+year — keeps different pressings of different years
+    // but removes true duplicates (same title, same year, different listing)
     const seen = new Set();
-    const results = (data.results || [])
-      .filter(item => {
-        const key = normaliseTitle(item.title);
-        if (!key || seen.has(key)) return false;
-        seen.add(key);
-        return item.cover_image && !item.cover_image.includes('spacer');
-      })
-      .map((item, i) => {
-        let artist = 'Unknown Artist', title = item.title || 'Unknown';
-        if (item.title?.includes(' - ')) {
-          const parts = item.title.split(' - ');
-          artist = parts[0].replace(/\s*\(\d+\)\s*$/, '').trim();
-          title  = parts.slice(1).join(' - ').trim();
-        }
-        const genre = item.genre?.[0] || item.style?.[0] || 'Unknown';
-        const year  = parseInt(item.year) || 0;
-        const avgPrice = estimateVinylPrice(genre, year);
-        return {
-          id: item.id || (90000 + Date.now() + i),
-          artist, title, year, genre,
-          label: item.label?.[0] || '',
-          avgPrice,
-          hasRealPrice: false,
-          thumb: item.cover_image || '',
-          pi: i % 10
-        };
-      });
+    const unique = (data.results || []).filter(item => {
+      if (!item.cover_image || item.cover_image.includes('spacer')) return false;
+      let titlePart = item.title || '';
+      if (titlePart.includes(' - ')) titlePart = titlePart.split(' - ').slice(1).join(' - ');
+      const key = titlePart.toLowerCase()
+        .replace(/[^a-z0-9]/g, '')
+        .trim() + '_' + (item.year || '0');
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    }).slice(0, 20);
 
+    // Map to record objects
+    const mapped = unique.map((item, i) => {
+      let artist = 'Unknown Artist', title = item.title || 'Unknown';
+      if (item.title?.includes(' - ')) {
+        const parts = item.title.split(' - ');
+        artist = parts[0].replace(/\s*\(\d+\)\s*$/, '').trim();
+        title  = parts.slice(1).join(' - ').trim();
+      }
+      const genre = item.genre?.[0] || item.style?.[0] || 'Unknown';
+      const year  = parseInt(item.year) || 0;
+      return {
+        id: item.id || (90000 + i),
+        artist, title, year, genre,
+        label: item.label?.[0] || '',
+        avgPrice: estimateVinylPrice(genre, year),
+        hasRealPrice: false,
+        thumb: item.cover_image || '',
+        pi: i % 10,
+        _releaseId: item.id,
+      };
+    });
+
+    // Show results immediately with estimated prices
     document.getElementById('loadingRow').style.display = 'none';
-    renderGrid(results);
+    renderGrid(mapped);
+
+    // Then fetch real prices for top 6 in background and update
+    const toPrice = mapped.slice(0, 6);
+    const priced = await Promise.all(
+      toPrice.map(async r => {
+        const price = await fetchDiscogsPrice(r._releaseId);
+        return price ? { ...r, avgPrice: price, hasRealPrice: true } : r;
+      })
+    );
+    const updated = [...priced, ...mapped.slice(6)];
+    renderGrid(updated);
+
   } catch (e) {
     document.getElementById('loadingRow').style.display = 'none';
     if (e.message.includes('429')) {
@@ -1179,7 +1212,7 @@ function renderGrid(records) {
         <div class="card-artist">${esc(r.artist)}</div>
         <div class="card-title">${esc(r.title)}</div>
         <div class="card-meta">
-          <span class="card-price">${r.avgPrice ? '$'+r.avgPrice : '—'}${r.hasRealPrice ? '' : '<span style="font-size:8px;opacity:0.45;margin-left:2px">est</span>'}</span>
+          <span class="card-price">${r.avgPrice ? '$'+r.avgPrice : '—'}<span style="font-size:8px;opacity:0.45;margin-left:3px">${r.hasRealPrice ? 'median' : 'est'}</span></span>
           ${r.priceRange ? `<span style="font-family:'DM Mono',monospace;font-size:8px;color:rgba(245,234,216,0.3);display:block;margin-top:1px">${r.priceRange}</span>` : ''}
           <span class="card-yr">${r.year || ''}</span>
         </div>
@@ -1570,15 +1603,11 @@ async function loadFeatured() {
   document.getElementById('loadingRow').style.display = 'flex';
   document.getElementById('loadingText').textContent = 'Loading popular vinyl…';
   try {
-    const DISCOGS_TOKEN = 'nedFGNiaotNFPLWjwawpnMOxWWFHqiIAMsoQfbtr'; // replace with your token
     const queries = ['jazz', 'hip-hop', 'soul', 'indie rock', 'electronic', 'classic rock'];
     const pick = queries[Math.floor(Date.now() / (1000 * 60 * 60 * 6)) % queries.length];
     const res = await fetch(
       `https://api.discogs.com/database/search?q=${encodeURIComponent(pick)}&type=master&format=vinyl&sort=have&sort_order=desc&per_page=48`,
-      { headers: {
-        'Authorization': `Discogs token=${DISCOGS_TOKEN}`,
-        'User-Agent': 'RecordRollup/1.0',
-      }}
+      { headers: { 'Authorization': `Discogs token=${DISCOGS_TOKEN}`, 'User-Agent': 'RecordRollup/1.0' }}
     );
     if (!res.ok) throw new Error('discogs error');
     const data = await res.json();
