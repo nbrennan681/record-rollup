@@ -21,6 +21,8 @@ export default async function handler(req, res) {
     } catch { return null; }
   }
 
+  // Returns ONLY the median from completed sales. Never falls back to listing price.
+  // Returns null if the release has no all-time sales history.
   async function getMedianPrice(releaseId) {
     try {
       const stats = await discogsFetch(
@@ -28,41 +30,35 @@ export default async function handler(req, res) {
       );
       if (!stats || stats.blocked_from_sale) return null;
       const median = stats.median?.value;
-      if (median && median > 0) return Math.round(median);
-      const lowest = stats.lowest_price?.value;
-      return lowest && lowest > 0 ? Math.round(lowest) : null;
+      return (median && median > 0) ? Math.round(median) : null;
     } catch { return null; }
   }
 
   try {
+    // type=release + format=vinyl ensures we get specific vinyl pressing IDs
+    // (not master IDs) which are required for marketplace/stats to work
     const data = await discogsFetch(
       `https://api.discogs.com/database/search?q=${encodeURIComponent(query)}&type=release&format=vinyl&per_page=50`
     );
 
-    const seen = new Set();
-    const unique = (data?.results || []).filter(item => {
-      if (!item.cover_image || item.cover_image.includes('spacer')) return false;
-      let titlePart = item.title || '';
-      if (titlePart.includes(' - ')) titlePart = titlePart.split(' - ').slice(1).join(' - ');
-      // Dedupe by title only — suppress reprints/reissues of same album
-      const key = titlePart.toLowerCase().replace(/[^a-z0-9]/g, '').trim();
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    }).slice(0, 20);
+    // Filter to results that have cover art — keep ALL variants/pressings (no deduplication)
+    const candidates = (data?.results || [])
+      .filter(item => item.cover_image && !item.cover_image.includes('spacer'))
+      .slice(0, 30); // Cap at 30 to stay within Vercel timeout
 
-    // Fetch median prices for top 6 in parallel
-    const enriched = await Promise.all(
-      unique.slice(0, 6).map(async item => {
-        const avg_price = await getMedianPrice(item.id);
-        return { ...item, avg_price, has_real_price: avg_price !== null };
+    // Fetch real median prices for all candidates in parallel
+    const withPrices = await Promise.all(
+      candidates.map(async item => {
+        const median = await getMedianPrice(item.id);
+        return { ...item, avg_price: median, has_real_price: median !== null };
       })
     );
 
-    const final = [...enriched, ...unique.slice(6)];
+    // Only return records that have actual completed sale history
+    const results = withPrices.filter(item => item.has_real_price);
 
     res.setHeader('Cache-Control', 'public, max-age=300');
-    return res.status(200).json({ results: final });
+    return res.status(200).json({ results });
   } catch (err) {
     return res.status(500).json({ error: err.message });
   }
