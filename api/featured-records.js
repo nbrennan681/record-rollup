@@ -16,7 +16,7 @@ export default async function handler(req, res) {
     } catch { return null; }
   }
 
-  // Get median vinyl sale price for a specific release ID
+  // Returns ONLY the median from completed sales. Never falls back to listing price.
   async function getMedianPrice(releaseId) {
     try {
       const stats = await discogsFetch(
@@ -24,9 +24,7 @@ export default async function handler(req, res) {
       );
       if (!stats || stats.blocked_from_sale) return null;
       const median = stats.median?.value;
-      if (median && median > 0) return Math.round(median);
-      const lowest = stats.lowest_price?.value;
-      return lowest && lowest > 0 ? Math.round(lowest) : null;
+      return (median && median > 0) ? Math.round(median) : null;
     } catch { return null; }
   }
 
@@ -34,13 +32,13 @@ export default async function handler(req, res) {
   const pick = queries[Math.floor(Date.now() / (1000 * 60 * 60 * 6)) % queries.length];
 
   try {
-    // Use type=release so IDs are actual release IDs usable with marketplace/stats
+    // type=release so we get real release IDs usable with marketplace/stats
     const data = await discogsFetch(
       `https://api.discogs.com/database/search?q=${encodeURIComponent(pick)}&type=release&format=vinyl&sort=have&sort_order=desc&per_page=60`
     );
     if (!data) throw new Error('Discogs fetch failed');
 
-    // Deduplicate by title (not title+year) to avoid same album appearing multiple times
+    // For the home page, deduplicate by title so we get variety across artists
     const seen = new Set();
     const unique = (data.results || [])
       .filter(item => {
@@ -52,17 +50,18 @@ export default async function handler(req, res) {
         seen.add(key);
         return true;
       })
-      .slice(0, 36);
+      .slice(0, 32); // Fetch stats for up to 32 unique titles
 
-    // Fetch real median prices for first 12 in parallel
-    const enriched = await Promise.all(
-      unique.slice(0, 12).map(async item => {
-        const avg_price = await getMedianPrice(item.id);
-        return { ...item, avg_price, has_real_price: avg_price !== null };
+    // Fetch real median prices for all in parallel
+    const withPrices = await Promise.all(
+      unique.map(async item => {
+        const median = await getMedianPrice(item.id);
+        return { ...item, avg_price: median, has_real_price: median !== null };
       })
     );
 
-    const results = [...enriched, ...unique.slice(12)];
+    // Only show records with verified median sale prices — no estimates
+    const results = withPrices.filter(item => item.has_real_price).slice(0, 24);
 
     res.setHeader('Cache-Control', 'public, max-age=3600');
     return res.status(200).json({ results });
