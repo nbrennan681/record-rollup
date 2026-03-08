@@ -1057,7 +1057,7 @@ async function discogsProxySearch(query) {
   document.getElementById('loadingRow').style.display = 'flex';
   document.getElementById('loadingText').textContent = 'Searching Discogs…';
   try {
-    const DISCOGS_TOKEN = 'YOUR_DISCOGS_TOKEN_HERE'; // replace with your token
+    const DISCOGS_TOKEN = 'nedFGNiaotNFPLWjwawpnMOxWWFHqiIAMsoQfbtr'; // replace with your token
     const res = await fetch(
       `https://api.discogs.com/database/search?q=${encodeURIComponent(query)}&type=master&per_page=25`,
       { headers: {
@@ -1570,7 +1570,7 @@ async function loadFeatured() {
   document.getElementById('loadingRow').style.display = 'flex';
   document.getElementById('loadingText').textContent = 'Loading popular vinyl…';
   try {
-    const DISCOGS_TOKEN = 'YOUR_DISCOGS_TOKEN_HERE'; // replace with your token
+    const DISCOGS_TOKEN = 'nedFGNiaotNFPLWjwawpnMOxWWFHqiIAMsoQfbtr'; // replace with your token
     const queries = ['jazz', 'hip-hop', 'soul', 'indie rock', 'electronic', 'classic rock'];
     const pick = queries[Math.floor(Date.now() / (1000 * 60 * 60 * 6)) % queries.length];
     const res = await fetch(
