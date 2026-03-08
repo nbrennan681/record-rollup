@@ -3,7 +3,6 @@ import crypto from 'crypto';
 function buildOAuthHeader(method, url, consumerKey, consumerSecret) {
   const nonce = crypto.randomBytes(16).toString('hex');
   const timestamp = Math.floor(Date.now() / 1000).toString();
-
   const params = {
     oauth_consumer_key: consumerKey,
     oauth_nonce: nonce,
@@ -11,29 +10,34 @@ function buildOAuthHeader(method, url, consumerKey, consumerSecret) {
     oauth_timestamp: timestamp,
     oauth_version: '1.0',
   };
-
-  // Build signature base string
   const sortedParams = Object.keys(params).sort().map(k =>
     `${encodeURIComponent(k)}=${encodeURIComponent(params[k])}`
   ).join('&');
-
   const baseString = [
     method.toUpperCase(),
     encodeURIComponent(url),
     encodeURIComponent(sortedParams),
   ].join('&');
-
-  // Sign with consumer secret (two-legged OAuth, no user token)
   const signingKey = `${encodeURIComponent(consumerSecret)}&`;
   const signature = crypto.createHmac('sha1', signingKey).update(baseString).digest('base64');
-
   params.oauth_signature = signature;
-
-  const headerValue = 'OAuth ' + Object.keys(params).sort().map(k =>
+  return 'OAuth ' + Object.keys(params).sort().map(k =>
     `${encodeURIComponent(k)}="${encodeURIComponent(params[k])}"`
   ).join(', ');
+}
 
-  return headerValue;
+function estimateVinylPrice(genre, year) {
+  let base = 22;
+  if (year && year < 1965) base = 70;
+  else if (year && year < 1975) base = 48;
+  else if (year && year < 1985) base = 35;
+  else if (year && year < 1995) base = 25;
+  else if (year && year >= 2015) base = 30;
+  if (/jazz|blues/i.test(genre))    base = Math.round(base * 1.4);
+  if (/soul|funk|r&b/i.test(genre)) base = Math.round(base * 1.2);
+  if (/hip.hop|rap/i.test(genre))   base = Math.round(base * 1.15);
+  if (/classical/i.test(genre))     base = Math.round(base * 0.7);
+  return base;
 }
 
 export default async function handler(req, res) {
@@ -45,7 +49,6 @@ export default async function handler(req, res) {
   const token = process.env.DISCOGS_TOKEN;
   const consumerKey = process.env.DISCOGS_CONSUMER_KEY;
   const consumerSecret = process.env.DISCOGS_CONSUMER_SECRET;
-
   if (!token) return res.status(500).json({ error: 'Token not configured' });
 
   const baseHeaders = {
@@ -69,45 +72,49 @@ export default async function handler(req, res) {
     } catch { return null; }
   }
 
-  // Get price suggestions (requires OAuth) — returns prices by condition from real sales
-  // Falls back to lowest_price from stats if OAuth not available
-  async function getPrice(releaseId) {
+  // Try OAuth price_suggestions first (real historical data), fall back to lowest_price,
+  // fall back to genre/year estimate — always return something so no records are hidden
+  async function getPrice(releaseId, genre, year) {
     try {
+      // 1. Try OAuth price suggestions (best — based on real completed sales)
       if (consumerKey && consumerSecret) {
         const url = `https://api.discogs.com/marketplace/price_suggestions/${releaseId}`;
         const suggestions = await discogsFetch(url, true);
-        if (suggestions) {
-          // Use VG+ price as the standard — most common condition for used vinyl
+        if (suggestions && typeof suggestions === 'object' && !suggestions.message) {
           const vgPlus = suggestions['Very Good Plus (VG+)']?.value;
-          const nm = suggestions['Near Mint (NM or M-)']?.value;
-          const vg = suggestions['Very Good (VG)']?.value;
+          const nm    = suggestions['Near Mint (NM or M-)']?.value;
+          const vg    = suggestions['Very Good (VG)']?.value;
           const price = vgPlus || nm || vg;
           if (price && price > 0) return { price: Math.round(price), label: 'VG+' };
         }
       }
-      // Fallback: lowest active listing price
+      // 2. Fall back to lowest active listing price
       const stats = await discogsFetch(
         `https://api.discogs.com/marketplace/stats/${releaseId}?curr_abbr=USD`
       );
-      if (!stats || stats.blocked_from_sale) return null;
-      const lowest = stats.lowest_price?.value;
-      return (lowest && lowest > 0) ? { price: Math.round(lowest), label: 'mkt' } : null;
-    } catch { return null; }
+      if (stats && !stats.blocked_from_sale && stats.lowest_price?.value > 0) {
+        return { price: Math.round(stats.lowest_price.value), label: 'mkt' };
+      }
+    } catch { /* fall through to estimate */ }
+
+    // 3. Last resort: genre/year estimate — clearly labeled
+    return { price: estimateVinylPrice(genre, year), label: 'est' };
   }
 
-  // Batched to stay within Discogs rate limits
   async function batchPrices(items, batchSize = 5) {
     const results = [];
     for (let i = 0; i < items.length; i += batchSize) {
       const batch = items.slice(i, i + batchSize);
       const batchResults = await Promise.all(
         batch.map(async item => {
-          const result = await getPrice(item.id);
+          const genre = item.genre?.[0] || item.style?.[0] || '';
+          const year  = parseInt(item.year) || 0;
+          const result = await getPrice(item.id, genre, year);
           return {
             ...item,
-            avg_price: result?.price ?? null,
-            price_label: result?.label ?? null,
-            has_real_price: result !== null,
+            avg_price: result.price,
+            price_label: result.label,
+            has_real_price: result.label !== 'est',
           };
         })
       );
@@ -124,13 +131,13 @@ export default async function handler(req, res) {
       `https://api.discogs.com/database/search?q=${encodeURIComponent(query)}&type=release&format=vinyl&per_page=50`
     );
 
-    // All variants/pressings — no deduplication
+    // All variants/pressings — no deduplication, filter only for cover art
     const candidates = (data?.results || [])
       .filter(item => item.cover_image && !item.cover_image.includes('spacer'))
       .slice(0, 20);
 
-    const withPrices = await batchPrices(candidates);
-    const results = withPrices.filter(item => item.has_real_price);
+    // Show ALL results — real prices labeled VG+ or mkt, estimated labeled est
+    const results = await batchPrices(candidates);
 
     res.setHeader('Cache-Control', 'public, max-age=300');
     return res.status(200).json({ results });
