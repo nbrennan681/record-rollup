@@ -263,10 +263,7 @@ main {
   margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .card-meta { display: flex; justify-content: space-between; margin-top: 3px; }
-.card-price {
-  font-family: 'DM Mono', monospace; font-size: 13px;
-  color: var(--amber-light); font-weight: 500;
-}
+
 .card-yr { font-family: 'DM Mono', monospace; font-size: 10px; color: rgba(245,234,216,0.35); }
 
 /* ── COLLECTION ── */
@@ -317,7 +314,7 @@ main {
 }
 .t-title { font-family: 'Lora', serif; font-size: 14px; color: var(--cream); margin-top: 2px; }
 .t-meta { font-family: 'DM Mono', monospace; font-size: 10px; color: rgba(245,234,216,0.38); text-transform: uppercase; letter-spacing: 1px; }
-.t-price { font-family: 'DM Mono', monospace; font-size: 16px; color: var(--amber-light); font-weight: 500; }
+
 
 .cond-select {
   background: rgba(255,255,255,0.05);
@@ -530,10 +527,10 @@ main {
 </header>
 
 <div class="stats-bar">
-  <div class="stat"><div class="stat-val" id="statCount">0</div><div class="stat-lbl">Records</div></div>
-  <div class="stat"><div class="stat-val" id="statTotal">$0</div><div class="stat-lbl">Total Value</div></div>
-  <div class="stat"><div class="stat-val" id="statAvg">$0</div><div class="stat-lbl">Avg Value</div></div>
-  <div class="stat"><div class="stat-val" id="statTop">—</div><div class="stat-lbl">Most Valuable</div></div>
+  <div class="stat"><div class="stat-val" id="statCount">0</div><div class="stat-lbl">In Collection</div></div>
+  <div class="stat"><div class="stat-val" id="statWant">0</div><div class="stat-lbl">On Wantlist</div></div>
+  <div class="stat"><div class="stat-val" id="statGenres">—</div><div class="stat-lbl">Genres</div></div>
+  <div class="stat"><div class="stat-val" id="statTop">—</div><div class="stat-lbl">Top Artist</div></div>
 </div>
 
 <div class="my-link-bar" id="myLinkBar">
@@ -577,7 +574,6 @@ main {
         <select id="wantSortSelect" onchange="renderWantlist()">
           <option value="artist">Sort: Artist A–Z</option>
           <option value="title">Sort: Title A–Z</option>
-          <option value="price">Sort: Value ↓</option>
           <option value="year">Sort: Year</option>
         </select>
       </div>
@@ -595,7 +591,6 @@ main {
         <select id="sortSelect" onchange="renderCollection()">
           <option value="artist">Sort: Artist A–Z</option>
           <option value="title">Sort: Title A–Z</option>
-          <option value="price">Sort: Value ↓</option>
           <option value="year">Sort: Year</option>
         </select>
       </div>
@@ -1077,9 +1072,6 @@ async function discogsProxySearch(query) {
         id: item.id || (90000 + i),
         artist, title, year, genre,
         label: item.label?.[0] || '',
-        avgPrice: Math.round(item.avg_price),
-        priceLabel: item.price_label || 'est',
-        hasRealPrice: item.has_real_price || false,
         thumb: item.cover_image || '',
         pi: i % 10,
       };
@@ -1107,20 +1099,6 @@ async function discogsProxySearch(query) {
         </div>`;
     }
   }
-}
-
-function estimateVinylPrice(genre, year) {
-  let base = 22;
-  if (year && year < 1965) base = 70;
-  else if (year && year < 1975) base = 48;
-  else if (year && year < 1985) base = 35;
-  else if (year && year < 1995) base = 25;
-  else if (year && year >= 2015) base = 30;
-  if (/jazz|blues/i.test(genre))      base = Math.round(base * 1.4);
-  if (/soul|funk|r&b/i.test(genre))   base = Math.round(base * 1.2);
-  if (/hip.hop|rap/i.test(genre))     base = Math.round(base * 1.15);
-  if (/classical/i.test(genre))       base = Math.round(base * 0.7);
-  return base;
 }
 
 // ── GRID ──
@@ -1174,9 +1152,8 @@ function renderGrid(records) {
         <div class="card-artist">${esc(r.artist)}</div>
         <div class="card-title">${esc(r.title)}</div>
         <div class="card-meta">
-          <span class="card-price">${r.avgPrice ? '$'+r.avgPrice : '—'}<span style="font-size:8px;opacity:0.45;margin-left:3px">${r.priceLabel || 'est'}</span></span>
-          ${r.priceRange ? `<span style="font-family:'DM Mono',monospace;font-size:8px;color:rgba(245,234,216,0.3);display:block;margin-top:1px">${r.priceRange}</span>` : ''}
           <span class="card-yr">${r.year || ''}</span>
+          <span class="card-yr">${esc(r.genre || '')}</span>
         </div>
       </div>
     </div>`;
@@ -1243,7 +1220,6 @@ function renderWantlist() {
   const sorted = [...wantlist].sort((a,b) => {
     if (sort==='artist') return a.artist.localeCompare(b.artist);
     if (sort==='title')  return a.title.localeCompare(b.title);
-    if (sort==='price')  return b.avgPrice - a.avgPrice;
     if (sort==='year')   return a.year - b.year;
     return 0;
   });
@@ -1262,7 +1238,7 @@ function renderWantlist() {
   el.innerHTML = `
   <table class="coll-table">
     <thead><tr>
-      <th></th><th>Album</th><th>Year</th><th>Genre</th><th>Avg Price</th><th></th>
+      <th></th><th>Album</th><th>Year</th><th>Genre</th><th></th>
     </tr></thead>
     <tbody>
     ${sorted.map(r => {
@@ -1275,7 +1251,6 @@ function renderWantlist() {
         </td>
         <td><span class="t-meta">${r.year}</span></td>
         <td><span class="t-meta">${esc(r.genre)}</span></td>
-        <td><div class="t-price">$${r.avgPrice}</div></td>
         <td style="display:flex;gap:6px;align-items:center;padding-top:16px">
           <button class="move-btn" onclick="moveToCollection(${r.id})">Got it ✓</button>
           <button class="remove-btn" onclick="removeWant(${r.id})">Remove</button>
@@ -1296,7 +1271,6 @@ function renderCollection() {
   const sorted = [...collection].sort((a,b) => {
     if (sort==='artist') return a.artist.localeCompare(b.artist);
     if (sort==='title')  return a.title.localeCompare(b.title);
-    if (sort==='price')  return b.avgPrice - a.avgPrice;
     if (sort==='year')   return a.year - b.year;
     return 0;
   });
@@ -1318,7 +1292,7 @@ function renderCollection() {
   el.innerHTML = `
   <table class="coll-table">
     <thead><tr>
-      <th></th><th>Album</th><th>Year</th><th>Genre</th><th>Condition</th><th>Avg Price</th><th></th>
+      <th></th><th>Album</th><th>Year</th><th>Genre</th><th>Condition</th><th></th>
     </tr></thead>
     <tbody>
     ${sorted.map(r => {
@@ -1337,7 +1311,6 @@ function renderCollection() {
             ${['M','NM','VG+','VG','G'].map(c=>`<option${c===cond?' selected':''}>${c}</option>`).join('')}
           </select>
         </td>
-        <td><div class="t-price">$${r.avgPrice}</div></td>
         <td><button class="remove-btn" onclick="removeRecord(${r.id})">Remove</button></td>
       </tr>`;
     }).join('')}
@@ -1347,13 +1320,14 @@ function renderCollection() {
 
 // ── STATS ──
 function updateStats() {
-  const total = collection.reduce((s,r) => s + r.avgPrice, 0);
-  const avg   = collection.length ? Math.round(total / collection.length) : 0;
-  const top   = collection.length ? collection.reduce((m,r) => r.avgPrice > m.avgPrice ? r : m, collection[0]) : null;
+  const genres = new Set(collection.map(r => r.genre?.split('/')[0].trim()).filter(Boolean));
+  const artistCounts = {};
+  collection.forEach(r => { artistCounts[r.artist] = (artistCounts[r.artist] || 0) + 1; });
+  const topArtist = Object.entries(artistCounts).sort((a,b) => b[1]-a[1])[0];
   document.getElementById('statCount').textContent = collection.length;
-  document.getElementById('statTotal').textContent = '$' + total.toLocaleString();
-  document.getElementById('statAvg').textContent   = '$' + avg;
-  document.getElementById('statTop').textContent   = top ? '$' + top.avgPrice : '—';
+  document.getElementById('statWant').textContent = wantlist.length;
+  document.getElementById('statGenres').textContent = genres.size || '—';
+  document.getElementById('statTop').textContent = topArtist ? topArtist[0].split(' ').slice(-1)[0] : '—';
 }
 
 // ── USER ID ──
@@ -1551,7 +1525,6 @@ async function checkSharedView() {
             <td><div class="t-artist">${esc(r.artist)}</div><div class="t-title">${esc(r.title)}</div></td>
             <td><span class="t-meta">${r.year}</span></td>
             <td><span class="t-meta">${esc(r.genre)}</span></td>
-            <td><div class="t-price">$${r.avgPrice}</div></td>
           </tr>`;
         }).join('')}
         </tbody>
@@ -1584,9 +1557,6 @@ async function loadFeatured() {
           id: item.id || (80000 + i),
           artist, title, year, genre,
           label: item.label?.[0] || '',
-          avgPrice: item.has_real_price ? item.avg_price : estimateVinylPrice(genre, year),
-          priceLabel: item.price_label || 'est',
-          hasRealPrice: item.has_real_price || false,
           thumb: item.cover_image,
           pi: i % 10,
         };
